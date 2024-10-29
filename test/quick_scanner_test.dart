@@ -2,7 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:quick_scanner_plus/quick_scanner_plus.dart';
 
 void main() {
- // const MethodChannel channel = MethodChannel('quick_scanner_plus');
+  // const MethodChannel channel = MethodChannel('quick_scanner_plus');
 
   TestWidgetsFlutterBinding.ensureInitialized();
 /*

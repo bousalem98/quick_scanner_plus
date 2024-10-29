@@ -1,20 +1,37 @@
 # quick_scanner_plus
 
-A cross-platform (Windows/macOS) scanner plugin for Flutter
+A cross-platform (Windows/macOS) scanner plugin for Flutter. This plugin allows you to easily integrate scanning functionality into your Flutter applications, enabling users to utilize connected scanners for various tasks.
+
+## Features
+
+- Start and stop watching for available scanners.
+- Fetch a list of connected scanners.
+- Scan files and retrieve their paths.
 
 ## Usage
 
-```
-QuickScanner.startWatch();
+```dart
+import 'package:quick_scanner_plus/quick_scanner_plus.dart';
+import 'package:path_provider/path_provider.dart';
 
+// Start watching for available scanners
+QuickScannerPlus.startWatch();
+
+// Get the list of available scanners
 var _scanners = await QuickScannerPlus.getScanners();
-var directory = await getApplicationDocumentsDirectory();
-var scannedFile = await QuickScannerPlus.scanFile(_scanners.first, directory.path);
 
+// Get the application's documents directory
+var directory = await getApplicationDocumentsDirectory();
+
+// Scan a file using the first available scanner
+var scannedFile = await QuickScannerPlus.scanFile(_scanners.first.id, directory.path);
+
+// Stop watching for scanners
 QuickScannerPlus.stopWatch();
+
 ```
 
-Also, for whole example, check out the **example** app in the [example](https://github.com/bousalem98/quick_scanners_plus/tree/main/example) directory or the 'Example' tab on pub.dartlang.org for a more complete example.
+Also, for whole example, check out the **example** app in the [example](https://github.com/bousalem98/quick_scanner_plus/tree/main/example) directory or the 'Example' tab on pub.dartlang.org for a more complete example.
 
 ## Main Contributors
 
@@ -27,6 +44,7 @@ Also, for whole example, check out the **example** app in the [example](https://
 <br/>
 
 ## License
+
 BSD 3-Clause License
 
 Copyright (c) 2021, Woodemi Co,Ltd.
@@ -56,5 +74,3 @@ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
 CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-

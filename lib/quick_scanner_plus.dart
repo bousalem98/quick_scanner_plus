@@ -11,7 +11,8 @@ class ScannerInfo {
 
 /// A class to interact with the QuickScanner plugin for scanning documents.
 class QuickScannerPlus {
-  static const MethodChannel _channel = const MethodChannel('quick_scanner_plus');
+  static const MethodChannel _channel =
+      const MethodChannel('quick_scanner_plus');
 
   /// Gets the platform version of the app.
   ///
@@ -55,7 +56,7 @@ class QuickScannerPlus {
 
   /// Scans a file using the specified scanner.
   ///
-  /// This method initiates a scan on the given device and saves the 
+  /// This method initiates a scan on the given device and saves the
   /// scanned file in the specified directory.
   ///
   /// Parameters:
