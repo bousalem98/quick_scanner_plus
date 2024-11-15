@@ -10,7 +10,8 @@ public class QuickScannerPlusPlugin: NSObject, FlutterPlugin {
   }
 
   private var deviceBrowser: ICDeviceBrowser!
-  private var scanners: [(name: String, id: String)] = [] // Change to store tuples of name and ID
+  private var scanners: [(name: String, id: String)] = [] // Tuple for UI-friendly scanner list
+  private var scannerDevices: [ICScannerDevice] = []     // Stores actual scanner objects
 
   override public init() {
     super.init()
@@ -31,7 +32,6 @@ public class QuickScannerPlusPlugin: NSObject, FlutterPlugin {
       deviceBrowser.stop()
       result(nil)
     case "getScanners":
-      // Return an array of dictionaries with scanner names and IDs
       let scannerList = scanners.map { ["id": $0.id, "name": $0.name] }
       result(scannerList)
     case "scanFile":
@@ -48,8 +48,13 @@ public class QuickScannerPlusPlugin: NSObject, FlutterPlugin {
   private var scanFileResult: FlutterResult? = nil
 
   private func scanFile(_ deviceId: String, directory: String) {
-    guard let scanner = scanners.first(where: { $0.id == deviceId }) else { return }
-    let scannerDevice = scanners.first { $0.id == deviceId }! // Get the scanner object
+    guard let scannerDevice = scannerDevices.first(where: { $0.uuidString == deviceId }) else {
+      scanFileResult?(FlutterError(code: "DeviceNotFound", message: "Scanner not found", details: nil))
+      return
+    }
+    scannerDevice.delegate = self
+    scannerDevice.transferMode = .fileBased
+    scannerDevice.downloadsDirectory = URL(fileURLWithPath: directory)
     scannerDevice.requestOpenSession()
   }
 
@@ -63,7 +68,6 @@ public class QuickScannerPlusPlugin: NSObject, FlutterPlugin {
       functionalUnit.pixelDataType = .BW
       functionalUnit.bitDepth = .depth1Bit
     } else {
-      // TODO other mode
       functionalUnit.pixelDataType = .RGB
       functionalUnit.bitDepth = .depth8Bits
     }
@@ -74,38 +78,42 @@ public class QuickScannerPlusPlugin: NSObject, FlutterPlugin {
 
 extension QuickScannerPlusPlugin: ICDeviceBrowserDelegate {
   public func deviceBrowser(_ browser: ICDeviceBrowser, didAdd device: ICDevice, moreComing: Bool) {
-    print("deviceBrowser:\(browser) didAdd:\(device.uuidString) moreComing:\(moreComing)")
-    if let scanner = device as? ICScannerDevice, !scanners.contains(where: { $0.id == scanner.uuidString }) {
-      let scannerName = scanner.name // Get the scanner name
-      scanners.append((name: scannerName, id: scanner.uuidString))
+    print("deviceBrowser:\(browser) didAdd:\(device.uuidString ?? "Unknown") moreComing:\(moreComing)")
+    if let scanner = device as? ICScannerDevice, 
+       !scannerDevices.contains(where: { $0.uuidString == scanner.uuidString }) {
+      scannerDevices.append(scanner)
+      scanners.append((name: scanner.name ?? "Unknown Scanner", id: scanner.uuidString ?? "Unknown ID"))
     }
   }
 
   public func deviceBrowser(_ browser: ICDeviceBrowser, didRemove device: ICDevice, moreGoing: Bool) {
-    print("deviceBrowser:\(browser) didRemove:\(device.uuidString) moreGoing:\(moreGoing)")
-    scanners.removeAll { $0.id == device.uuidString }
+    print("deviceBrowser:\(browser) didRemove:\(device.uuidString ?? "Unknown") moreGoing:\(moreGoing)")
+    if let uuid = device.uuidString {
+      scanners.removeAll { $0.id == uuid }
+      scannerDevices.removeAll { $0.uuidString == uuid }
+    }
   }
 }
 
 extension QuickScannerPlusPlugin: ICDeviceDelegate {
   public func device(_ device: ICDevice, didOpenSessionWithError error: Error?) {
-    print("device:\(device.uuidString) didOpenSessionWithError:\(error)")
+    print("device:\(device.uuidString ?? "Unknown") didOpenSessionWithError:\(error?.localizedDescription ?? "No error")")
   }
 
   public func device(_ device: ICDevice, didCloseSessionWithError error: Error?) {
-    print("device:\(device.uuidString) didCloseSessionWithError:\(error)")
+    print("device:\(device.uuidString ?? "Unknown") didCloseSessionWithError:\(error?.localizedDescription ?? "No error")")
   }
 
   public func didRemove(_ device: ICDevice) {
-    print("didRemove:\(device.uuidString)")
+    print("didRemove:\(device.uuidString ?? "Unknown")")
   }
 
   public func deviceDidBecomeReady(_ device: ICDevice) {
-    print("deviceDidBecomeReady:\(device.uuidString)")
+    print("deviceDidBecomeReady:\(device.uuidString ?? "Unknown")")
     let scanner = device as! ICScannerDevice
     let supportDocumentFeeder = scanner.availableFunctionalUnitTypes.contains(ICScannerFunctionalUnitType.documentFeeder.rawValue as NSNumber)
     if supportDocumentFeeder {
-      // TODO
+      // TODO: Handle document feeder
     }
     scanner.requestSelect(.flatbed)
   }
@@ -113,24 +121,24 @@ extension QuickScannerPlusPlugin: ICDeviceDelegate {
 
 extension QuickScannerPlusPlugin: ICScannerDeviceDelegate {
   public func scannerDeviceDidBecomeAvailable(_ scanner: ICScannerDevice) {
-    print("scannerDeviceDidBecomeAvailable:\(scanner.uuidString)")
+    print("scannerDeviceDidBecomeAvailable:\(scanner.uuidString ?? "Unknown")")
   }
 
   public func scannerDevice(_ scanner: ICScannerDevice, didSelect functionalUnit: ICScannerFunctionalUnit, error: Error?) {
-    print("scannerDevice:\(scanner.uuidString) didSelectFunctionalUnit:\(functionalUnit) error:\(error)")
+    print("scannerDevice:\(scanner.uuidString ?? "Unknown") didSelectFunctionalUnit:\(functionalUnit) error:\(error?.localizedDescription ?? "No error")")
     if functionalUnit.type == .flatbed {
       scanFileFlatbed(scanner)
     }
   }
 
   public func scannerDevice(_ scanner: ICScannerDevice, didScanTo url: URL) {
-    print("scannerDevice:\(scanner.uuidString) didScanTo:\(url)")
+    print("scannerDevice:\(scanner.uuidString ?? "Unknown") didScanTo:\(url)")
     scanFileResult?(url.path)
     scanFileResult = nil
   }
 
   public func scannerDevice(_ scanner: ICScannerDevice, didCompleteScanWithError error: Error?) {
-    print("scannerDevice:\(scanner.uuidString) didCompleteScanWithError:\(error)")
+    print("scannerDevice:\(scanner.uuidString ?? "Unknown") didCompleteScanWithError:\(error?.localizedDescription ?? "No error")")
     if let e = error {
       scanFileResult?(FlutterError(code: "ScanError", message: e.localizedDescription, details: nil))
       scanFileResult = nil
