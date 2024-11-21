@@ -52,10 +52,26 @@ public class QuickScannerPlusPlugin: NSObject, FlutterPlugin {
       scanFileResult?(FlutterError(code: "DeviceNotFound", message: "Scanner not found", details: nil))
       return
     }
-    scannerDevice.delegate = self
-    scannerDevice.transferMode = .fileBased
-    scannerDevice.downloadsDirectory = URL(fileURLWithPath: directory)
-    scannerDevice.requestOpenSession()
+    
+    // Perform scanning operation in a separate thread for responsiveness
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        scannerDevice.delegate = self
+        scannerDevice.transferMode = .fileBased
+        scannerDevice.downloadsDirectory = URL(fileURLWithPath: directory)
+        try scannerDevice.requestOpenSession()
+        
+        // Wait for the scan to complete, then handle it
+        DispatchQueue.main.async {
+          self.scanFileFlatbed(scannerDevice)
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.scanFileResult?(FlutterError(code: "ScanError", message: error.localizedDescription, details: nil))
+          self.scanFileResult = nil
+        }
+      }
+    }
   }
 
   private func scanFileFlatbed(_ scanner: ICScannerDevice) {

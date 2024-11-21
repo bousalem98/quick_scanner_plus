@@ -19,21 +19,37 @@ class QuickScannerPlus {
   /// Returns a [String] representing the platform version,
   /// or `null` if the version could not be retrieved.
   static Future<String?> get platformVersion async {
-    final String? version = await _channel.invokeMethod('getPlatformVersion');
-    return version;
+    try {
+      final String? version = await _channel.invokeMethod('getPlatformVersion');
+      return version;
+    } catch (e) {
+      throw Exception('Failed to retrieve platform version: $e');
+    }
   }
 
   /// Starts watching for available scanner devices.
   ///
   /// This method sets up a listener to monitor the availability
   /// of scanners. Call this method before trying to access any scanners.
-  static Future<void> startWatch() => _channel.invokeMethod('startWatch');
+  static Future<void> startWatch() async {
+    try {
+      await _channel.invokeMethod('startWatch');
+    } catch (e) {
+      throw Exception('Failed to start watching devices: $e');
+    }
+  }
 
   /// Stops watching for scanner devices.
   ///
   /// This method should be called when you no longer need to monitor
   /// scanner devices to clean up resources.
-  static Future<void> stopWatch() => _channel.invokeMethod('stopWatch');
+  static Future<void> stopWatch() async {
+    try {
+      await _channel.invokeMethod('stopWatch');
+    } catch (e) {
+      throw Exception('Failed to stop watching devices: $e');
+    }
+  }
 
   /// Retrieves a list of available scanners.
   ///
@@ -42,16 +58,17 @@ class QuickScannerPlus {
   ///
   /// Returns a [List<ScannerInfo>] containing the available scanners.
   static Future<List<ScannerInfo>> getScanners() async {
-    // Get the list of scanners from the native side
-    List<dynamic> list = await _channel.invokeMethod('getScanners');
-
-    // Map the list of maps to List<ScannerInfo>
-    return list.map((scanner) {
-      return ScannerInfo(
-        id: scanner['id'] as String,
-        name: scanner['name'] as String,
-      );
-    }).toList();
+    try {
+      List<dynamic> list = await _channel.invokeMethod('getScanners');
+      return list.map((scanner) {
+        return ScannerInfo(
+          id: scanner['id'] as String,
+          name: scanner['name'] as String,
+        );
+      }).toList();
+    } catch (e) {
+      throw Exception('Failed to retrieve scanners: $e');
+    }
   }
 
   /// Scans a file using the specified scanner.
@@ -65,10 +82,14 @@ class QuickScannerPlus {
   ///
   /// Returns the path of the scanned file as a [String].
   static Future<String> scanFile(String deviceId, String directory) async {
-    String path = await _channel.invokeMethod('scanFile', {
-      'deviceId': deviceId,
-      'directory': directory,
-    });
-    return path;
+    try {
+      String path = await _channel.invokeMethod('scanFile', {
+        'deviceId': deviceId,
+        'directory': directory,
+      });
+      return path;
+    } catch (e) {
+      throw Exception('Failed to scan file: $e');
+    }
   }
 }

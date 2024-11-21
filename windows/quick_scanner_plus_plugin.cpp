@@ -18,8 +18,9 @@
 #include <map>
 #include <memory>
 #include <sstream>
-#include <tuple> // Include for using std::tuple
-
+#include <tuple>   // Include for using std::tuple
+#include <fstream> // For logging
+#include <future>  // For std::async
 using namespace winrt;
 using namespace Windows::Foundation;
 using namespace Windows::Foundation::Collections;
@@ -57,6 +58,7 @@ namespace
 
     winrt::fire_and_forget ScanFileAsync(std::string device_id, std::string directory,
                                          std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
+    void LogError(const std::string &message); // Logging function
   };
 
   // static
@@ -128,10 +130,10 @@ namespace
     else if (method_call.method_name().compare("getScanners") == 0)
     {
       flutter::EncodableList list{};
-      for (const auto& scanner : scanners_)
+      for (const auto &scanner : scanners_)
       {
         flutter::EncodableMap scannerInfo;
-        scannerInfo[flutter::EncodableValue("id")] = flutter::EncodableValue(std::get<1>(scanner)); // ID
+        scannerInfo[flutter::EncodableValue("id")] = flutter::EncodableValue(std::get<1>(scanner));   // ID
         scannerInfo[flutter::EncodableValue("name")] = flutter::EncodableValue(std::get<0>(scanner)); // Name
         list.push_back(flutter::EncodableValue(scannerInfo));
       }
@@ -157,9 +159,8 @@ namespace
 
     auto device_id = winrt::to_string(info.Id());
     auto scanner_name = winrt::to_string(info.Name()); // Get the scanner name
-    auto it = std::find_if(scanners_.begin(), scanners_.end(), [&](const auto& scanner) {
-      return std::get<1>(scanner) == device_id;
-    });
+    auto it = std::find_if(scanners_.begin(), scanners_.end(), [&](const auto &scanner)
+                           { return std::get<1>(scanner) == device_id; });
 
     if (it == scanners_.end())
     {
@@ -172,9 +173,8 @@ namespace
     std::cout << "DeviceWatcher_Removed " << winrt::to_string(infoUpdate.Id()) << std::endl;
 
     auto device_id = winrt::to_string(infoUpdate.Id());
-    auto it = std::find_if(scanners_.begin(), scanners_.end(), [&](const auto& scanner) {
-      return std::get<1>(scanner) == device_id;
-    });
+    auto it = std::find_if(scanners_.begin(), scanners_.end(), [&](const auto &scanner)
+                           { return std::get<1>(scanner) == device_id; });
 
     if (it != scanners_.end())
     {
@@ -182,42 +182,55 @@ namespace
     }
   }
 
-  winrt::fire_and_forget QuickScannerPlusPlugin::ScanFileAsync(std::string device_id, std::string directory,
-                                                               std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result)
+  winrt::fire_and_forget QuickScannerPlusPlugin::ScanFileAsync(std::string device_id, std::string directory, std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result)
   {
-    auto scanner = co_await ImageScanner::FromIdAsync(winrt::to_hstring(device_id));
-
-    if (scanner.IsScanSourceSupported(ImageScannerScanSource::Feeder))
-    {
-      // TODO
-    }
-
-    auto flatbedConfiguration = scanner.FlatbedConfiguration();
-    auto supportGrayscale = flatbedConfiguration.IsColorModeSupported(ImageScannerColorMode::Grayscale);
-    auto supportColor = flatbedConfiguration.IsColorModeSupported(ImageScannerColorMode::Color);
-    if (!supportGrayscale && !supportColor)
-    {
-      flatbedConfiguration.ColorMode(ImageScannerColorMode::Monochrome);
-    }
-    else
-    {
-      // TODO other mode
-      flatbedConfiguration.ColorMode(ImageScannerColorMode::Color);
-    }
-
+    auto asyncTask = std::async(std::launch::async, [this, device_id, directory, result = std::move(result)]() mutable
+                                {
     try
     {
-      auto storageFolder = co_await StorageFolder::GetFolderFromPathAsync(winrt::to_hstring(directory));
-      auto scanResult = co_await scanner.ScanFilesToFolderAsync(ImageScannerScanSource::Flatbed, storageFolder);
-      auto path = scanResult.ScannedFiles().First().Current().Path();
-      result->Success(flutter::EncodableValue(winrt::to_string(path)));
+      auto scanner = ImageScanner::FromIdAsync(winrt::to_hstring(device_id)).get();
+      if (!scanner)
+      {
+        result->Error("InvalidScanner", "Could not retrieve scanner.");
+        return;
+      }
+
+      auto storageFolder = StorageFolder::GetFolderFromPathAsync(winrt::to_hstring(directory)).get();
+      auto scanResult = scanner.ScanFilesToFolderAsync(ImageScannerScanSource::Flatbed, storageFolder).get();
+      auto scannedFiles = scanResult.ScannedFiles();
+      if (scannedFiles.Size() > 0)
+      {
+        auto path = scannedFiles.GetAt(0).Path();
+        result->Success(flutter::EncodableValue(winrt::to_string(path)));
+      }
+      else
+      {
+        result->Error("ScanFailed", "No files were scanned.");
+      }
     }
-    catch (winrt::hresult_error const &ex)
+    catch (const winrt::hresult_error &ex)
     {
+      LogError("WinRT Error: " + winrt::to_string(ex.message()));
       result->Error(std::to_string(ex.code()), winrt::to_string(ex.message()));
     }
-  }
+    catch (const std::exception &ex)
+    {
+      LogError("Standard Exception: " + std::string(ex.what()));
+      result->Error("StandardException", ex.what());
+    }
+    catch (...)
+    {
+      LogError("Unknown error occurred during scanning.");
+      result->Error("UnknownError", "An unknown error occurred.");
+    } });
 
+    co_return;
+  }
+  void QuickScannerPlusPlugin::LogError(const std::string &message)
+  {
+    std::ofstream log_file("plugin_debug.log", std::ios::app);
+    log_file << "Error: " << message << std::endl;
+  }
 } // namespace
 
 void QuickScannerPlusPluginRegisterWithRegistrar(
