@@ -58,7 +58,6 @@ namespace
 
     winrt::fire_and_forget ScanFileAsync(std::string device_id, std::string directory,
                                          std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
-    void LogError(const std::string &message); // Logging function
   };
 
   // static
@@ -181,56 +180,85 @@ namespace
       scanners_.erase(it);
     }
   }
-
-  winrt::fire_and_forget QuickScannerPlusPlugin::ScanFileAsync(std::string device_id, std::string directory, std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result)
+  winrt::fire_and_forget QuickScannerPlusPlugin::ScanFileAsync(std::string device_id, std::string directory,
+                                                               std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result)
   {
-    auto asyncTask = std::async(std::launch::async, [this, device_id, directory, result = std::move(result)]() mutable
-                                {
     try
     {
-      auto scanner = ImageScanner::FromIdAsync(winrt::to_hstring(device_id)).get();
+      // Initialize the scanner from the device ID
+      auto scanner = co_await ImageScanner::FromIdAsync(winrt::to_hstring(device_id));
       if (!scanner)
       {
-        result->Error("InvalidScanner", "Could not retrieve scanner.");
-        return;
+        result->Error("ScannerInitializationFailed", "Scanner could not be initialized.");
+        co_return;
       }
 
-      auto storageFolder = StorageFolder::GetFolderFromPathAsync(winrt::to_hstring(directory)).get();
-      auto scanResult = scanner.ScanFilesToFolderAsync(ImageScannerScanSource::Flatbed, storageFolder).get();
-      auto scannedFiles = scanResult.ScannedFiles();
-      if (scannedFiles.Size() > 0)
+      // Check if the scanner supports flatbed scanning
+      if (!scanner.IsScanSourceSupported(ImageScannerScanSource::Flatbed))
       {
-        auto path = scannedFiles.GetAt(0).Path();
-        result->Success(flutter::EncodableValue(winrt::to_string(path)));
+        result->Error("ScanSourceNotSupported", "Flatbed scanning is not supported on this scanner.");
+        co_return;
+      }
+
+      // Configure scanner settings
+      auto flatbedConfiguration = scanner.FlatbedConfiguration();
+      if (flatbedConfiguration.IsColorModeSupported(ImageScannerColorMode::Color))
+      {
+        flatbedConfiguration.ColorMode(ImageScannerColorMode::Color);
+      }
+      else if (flatbedConfiguration.IsColorModeSupported(ImageScannerColorMode::Grayscale))
+      {
+        flatbedConfiguration.ColorMode(ImageScannerColorMode::Grayscale);
       }
       else
       {
-        result->Error("ScanFailed", "No files were scanned.");
+        result->Error("UnsupportedScanModes", "Scanner does not support required color modes.");
+        co_return;
       }
+
+      // Validate and access the target directory
+      auto storageFolder = co_await StorageFolder::GetFolderFromPathAsync(winrt::to_hstring(directory));
+      if (!storageFolder)
+      {
+        result->Error("InvalidDirectory", "Specified directory does not exist or is inaccessible.");
+        co_return;
+      }
+
+      // Perform the scan and handle the results
+      auto scanResult = co_await scanner.ScanFilesToFolderAsync(ImageScannerScanSource::Flatbed, storageFolder);
+      if (!scanResult.ScannedFiles().Size())
+      {
+        result->Error("ScanFailed", "No files were scanned.");
+        co_return;
+      }
+
+      // Return the path of the first scanned file
+      auto path = scanResult.ScannedFiles().First().Current().Path();
+      result->Success(flutter::EncodableValue(winrt::to_string(path)));
     }
-    catch (const winrt::hresult_error &ex)
+    catch (winrt::hresult_error const &ex)
     {
-      LogError("WinRT Error: " + winrt::to_string(ex.message()));
+      // Handle WinRT-specific exceptions
+      std::string message = "WinRT error occurred: " + winrt::to_string(ex.message());
+      OutputDebugStringA(message.c_str()); // Log the error
       result->Error(std::to_string(ex.code()), winrt::to_string(ex.message()));
     }
-    catch (const std::exception &ex)
+    catch (std::exception const &e)
     {
-      LogError("Standard Exception: " + std::string(ex.what()));
-      result->Error("StandardException", ex.what());
+      // Handle standard C++ exceptions
+      std::string message = "Standard exception occurred: " + std::string(e.what());
+      OutputDebugStringA(message.c_str()); // Log the error
+      result->Error("UnexpectedError", e.what());
     }
     catch (...)
     {
-      LogError("Unknown error occurred during scanning.");
+      // Handle any other type of exception
+      std::string message = "An unknown error occurred.";
+      OutputDebugStringA(message.c_str()); // Log the error
       result->Error("UnknownError", "An unknown error occurred.");
-    } });
+    }
+  }
 
-    co_return;
-  }
-  void QuickScannerPlusPlugin::LogError(const std::string &message)
-  {
-    std::ofstream log_file("plugin_debug.log", std::ios::app);
-    log_file << "Error: " << message << std::endl;
-  }
 } // namespace
 
 void QuickScannerPlusPluginRegisterWithRegistrar(
