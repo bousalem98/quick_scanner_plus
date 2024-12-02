@@ -17,10 +17,7 @@ public class QuickScannerPlusPlugin: NSObject, FlutterPlugin {
         super.init()
         deviceBrowser = ICDeviceBrowser()
         deviceBrowser.delegate = self
-        deviceBrowser.browsedDeviceTypeMask = [
-            ICDeviceTypeMask.scanner.rawValue,
-            ICDeviceLocationTypeMask.local.rawValue
-        ].reduce(0, |)
+        deviceBrowser.browsedDeviceTypeMask = ICDeviceTypeMask(rawValue: (ICDeviceTypeMask.scanner.rawValue | ICDeviceLocationTypeMask.local.rawValue)) ?? ICDeviceTypeMask()
     }
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -59,30 +56,24 @@ public class QuickScannerPlusPlugin: NSObject, FlutterPlugin {
         }
 
         DispatchQueue.global(qos: .userInitiated).async {
-            do {
-                scannerDevice.delegate = self
-                scannerDevice.transferMode = .fileBased
-                scannerDevice.downloadsDirectory = URL(fileURLWithPath: directory)
-                try scannerDevice.requestOpenSession()
+            // Directly set the delegate and transfer mode
+            scannerDevice.delegate = self
+            scannerDevice.transferMode = .fileBased
+            scannerDevice.downloadsDirectory = URL(fileURLWithPath: directory)
 
-                DispatchQueue.main.async {
-                    self.handleAvailableScanSources(scannerDevice)
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.scanFileResult?(FlutterError(code: "ScanError", message: error.localizedDescription, details: nil))
-                    self.scanFileResult = nil
-                }
+            // Open session without try, as it doesn't throw errors
+            scannerDevice.requestOpenSession()
+
+            // Switch to the main thread to handle available scan sources
+            DispatchQueue.main.async {
+                self.handleAvailableScanSources(scannerDevice)
             }
         }
     }
 
     private func handleAvailableScanSources(_ scanner: ICScannerDevice) {
-        guard let functionalUnitTypes = scanner.availableFunctionalUnitTypes as? [NSNumber] else {
-            scanFileResult?(FlutterError(code: "NoFunctionalUnit", message: "No functional unit available on the scanner", details: nil))
-            scanFileResult = nil
-            return
-        }
+        // No need to cast availableFunctionalUnitTypes, it's already of type [NSNumber]
+        let functionalUnitTypes = scanner.availableFunctionalUnitTypes
 
         if functionalUnitTypes.contains(NSNumber(value: ICScannerFunctionalUnitType.documentFeeder.rawValue)) {
             scanner.requestSelect(.documentFeeder)
@@ -124,6 +115,24 @@ extension QuickScannerPlusPlugin: ICDeviceBrowserDelegate {
             scanners.removeAll { $0.id == uuid }
             scannerDevices.removeAll { $0.uuidString == uuid }
         }
+    }
+}
+
+extension QuickScannerPlusPlugin: ICDeviceDelegate {
+    public func device(_ device: ICDevice, didOpenSessionWithError error: Error?) {
+        print("Session opened for device: \(device.uuidString ?? "Unknown UUID")")
+    }
+
+    public func device(_ device: ICDevice, didCloseSessionWithError error: Error?) {
+        print("Session closed for device: \(device.uuidString ?? "Unknown UUID")")
+    }
+
+    public func didRemove(_ device: ICDevice) {
+        print("Device removed: \(device.uuidString ?? "Unknown UUID")")
+    }
+
+    public func deviceDidBecomeReady(_ device: ICDevice) {
+        print("Device is ready: \(device.uuidString ?? "Unknown UUID")")
     }
 }
 
