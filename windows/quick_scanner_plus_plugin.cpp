@@ -180,12 +180,14 @@ namespace
       scanners_.erase(it);
     }
   }
-  winrt::fire_and_forget QuickScannerPlusPlugin::ScanFileAsync(std::string device_id, std::string directory,
-                                                               std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result)
+  winrt::fire_and_forget QuickScannerPlusPlugin::ScanFileAsync(
+      std::string device_id,
+      std::string directory,
+      std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result)
   {
     try
     {
-      // Initialize the scanner from the device ID
+      // Initialize the scanner
       auto scanner = co_await ImageScanner::FromIdAsync(winrt::to_hstring(device_id));
       if (!scanner)
       {
@@ -193,30 +195,63 @@ namespace
         co_return;
       }
 
-      // Check if the scanner supports flatbed scanning
-      if (!scanner.IsScanSourceSupported(ImageScannerScanSource::Flatbed))
+      // Determine the scan source
+      ImageScannerScanSource scanSource = ImageScannerScanSource::Flatbed;
+      if (scanner.IsScanSourceSupported(ImageScannerScanSource::Flatbed))
       {
-        result->Error("ScanSourceNotSupported", "Flatbed scanning is not supported on this scanner.");
+        scanSource = ImageScannerScanSource::Flatbed;
+      }
+      else if (scanner.IsScanSourceSupported(ImageScannerScanSource::Feeder))
+      {
+        scanSource = ImageScannerScanSource::Feeder;
+      }
+      else if (scanner.IsScanSourceSupported(ImageScannerScanSource::AutoConfigured))
+      {
+        scanSource = ImageScannerScanSource::AutoConfigured;
+      }
+      else
+      {
+        result->Error("ScanSourceNotSupported", "No supported scan source available on this scanner.");
         co_return;
       }
 
       // Configure scanner settings
-      auto flatbedConfiguration = scanner.FlatbedConfiguration();
-      if (flatbedConfiguration.IsColorModeSupported(ImageScannerColorMode::Color))
+      if (scanSource == ImageScannerScanSource::Flatbed)
       {
-        flatbedConfiguration.ColorMode(ImageScannerColorMode::Color);
+        auto flatbedConfig = scanner.FlatbedConfiguration();
+        if (flatbedConfig.IsColorModeSupported(ImageScannerColorMode::Color))
+        {
+          flatbedConfig.ColorMode(ImageScannerColorMode::Color);
+        }
+        else if (flatbedConfig.IsColorModeSupported(ImageScannerColorMode::Grayscale))
+        {
+          flatbedConfig.ColorMode(ImageScannerColorMode::Grayscale);
+        }
+        else
+        {
+          result->Error("UnsupportedScanModes", "Flatbed does not support required color modes.");
+          co_return;
+        }
       }
-      else if (flatbedConfiguration.IsColorModeSupported(ImageScannerColorMode::Grayscale))
+      else if (scanSource == ImageScannerScanSource::Feeder)
       {
-        flatbedConfiguration.ColorMode(ImageScannerColorMode::Grayscale);
-      }
-      else
-      {
-        result->Error("UnsupportedScanModes", "Scanner does not support required color modes.");
-        co_return;
+        auto feederConfig = scanner.FeederConfiguration();
+        if (feederConfig.IsColorModeSupported(ImageScannerColorMode::Color))
+        {
+          feederConfig.ColorMode(ImageScannerColorMode::Color);
+        }
+        else if (feederConfig.IsColorModeSupported(ImageScannerColorMode::Grayscale))
+        {
+          feederConfig.ColorMode(ImageScannerColorMode::Grayscale);
+        }
+        else
+        {
+          result->Error("UnsupportedScanModes", "Feeder does not support required color modes.");
+          co_return;
+        }
       }
 
-      // Validate and access the target directory
+      // Validate directory
       auto storageFolder = co_await StorageFolder::GetFolderFromPathAsync(winrt::to_hstring(directory));
       if (!storageFolder)
       {
@@ -224,37 +259,51 @@ namespace
         co_return;
       }
 
-      // Perform the scan and handle the results
-      auto scanResult = co_await scanner.ScanFilesToFolderAsync(ImageScannerScanSource::Flatbed, storageFolder);
+      // Perform the scan
+      auto scanResult = co_await scanner.ScanFilesToFolderAsync(scanSource, storageFolder);
+
+      // Wait until files are accessible (confirm the scanning process is fully complete)
+      int maxRetries = 5;
+      int retries = 0;
+      while (!scanResult.ScannedFiles().Size() && retries < maxRetries)
+      {
+        co_await winrt::resume_after(std::chrono::seconds(1)); // Wait for 1 second
+        retries++;
+      }
+
       if (!scanResult.ScannedFiles().Size())
       {
-        result->Error("ScanFailed", "No files were scanned.");
+        result->Error("ScanFailed", "No files were scanned after waiting.");
         co_return;
       }
 
-      // Return the path of the first scanned file
-      auto path = scanResult.ScannedFiles().First().Current().Path();
+      // Confirm file presence and return the first scanned file path
+      auto scannedFile = scanResult.ScannedFiles().First().Current();
+      if (!scannedFile)
+      {
+        result->Error("ScanFailed", "Scanned file could not be retrieved.");
+        co_return;
+      }
+
+      auto path = scannedFile.Path();
       result->Success(flutter::EncodableValue(winrt::to_string(path)));
     }
     catch (winrt::hresult_error const &ex)
     {
-      // Handle WinRT-specific exceptions
       std::string message = "WinRT error occurred: " + winrt::to_string(ex.message());
-      OutputDebugStringA(message.c_str()); // Log the error
+      OutputDebugStringA(message.c_str()); // Log error
       result->Error(std::to_string(ex.code()), winrt::to_string(ex.message()));
     }
     catch (std::exception const &e)
     {
-      // Handle standard C++ exceptions
       std::string message = "Standard exception occurred: " + std::string(e.what());
-      OutputDebugStringA(message.c_str()); // Log the error
+      OutputDebugStringA(message.c_str()); // Log error
       result->Error("UnexpectedError", e.what());
     }
     catch (...)
     {
-      // Handle any other type of exception
       std::string message = "An unknown error occurred.";
-      OutputDebugStringA(message.c_str()); // Log the error
+      OutputDebugStringA(message.c_str()); // Log error
       result->Error("UnknownError", "An unknown error occurred.");
     }
   }
