@@ -2,7 +2,7 @@ import Cocoa
 import FlutterMacOS
 import ImageCaptureCore
 
-public class QuickScannerPlusPlugin: NSObject, FlutterPlugin {
+public class QuickScannerPlusPlugin: NSObject, FlutterPlugin, ICDeviceBrowserDelegate, ICDeviceDelegate, ICScannerDeviceDelegate {
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(name: "quick_scanner_plus", binaryMessenger: registrar.messenger)
         let instance = QuickScannerPlusPlugin()
@@ -12,12 +12,17 @@ public class QuickScannerPlusPlugin: NSObject, FlutterPlugin {
     private var deviceBrowser: ICDeviceBrowser!
     private var scanners: [(name: String, id: String)] = []
     private var scannerDevices: [ICScannerDevice] = []
+    private var scanFileResult: FlutterResult?
+    private var activeScanner: ICScannerDevice?
+    private var scanDirectory: URL?
 
     override public init() {
         super.init()
         deviceBrowser = ICDeviceBrowser()
         deviceBrowser.delegate = self
-        deviceBrowser.browsedDeviceTypeMask = ICDeviceTypeMask(rawValue: (ICDeviceTypeMask.scanner.rawValue | ICDeviceLocationTypeMask.local.rawValue)) ?? ICDeviceTypeMask()
+        deviceBrowser.browsedDeviceTypeMask = ICDeviceTypeMask(
+            rawValue: ICDeviceTypeMask.scanner.rawValue | ICDeviceLocationTypeMask.local.rawValue
+        )!
     }
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -40,41 +45,48 @@ public class QuickScannerPlusPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "InvalidArguments", message: "Invalid arguments provided", details: nil))
                 return
             }
+            
             scanFileResult = result
-            scanFile(deviceId, directory: directory)
+            let directoryURL = URL(fileURLWithPath: directory, isDirectory: true)
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory), isDirectory.boolValue {
+                scanDirectory = directoryURL
+                scanFile(deviceId: deviceId)
+            } else {
+                result(FlutterError(code: "InvalidDirectory", message: "Directory does not exist", details: nil))
+                scanFileResult = nil
+            }
+            
         default:
             result(FlutterMethodNotImplemented)
         }
     }
 
-    private var scanFileResult: FlutterResult? = nil
-
-    private func scanFile(_ deviceId: String, directory: String) {
+    private func scanFile(deviceId: String) {
         guard let scannerDevice = scannerDevices.first(where: { $0.uuidString == deviceId }) else {
             scanFileResult?(FlutterError(code: "DeviceNotFound", message: "Scanner not found", details: nil))
+            scanFileResult = nil
             return
         }
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            // Directly set the delegate and transfer mode
-            scannerDevice.delegate = self
-            scannerDevice.transferMode = .fileBased
-            scannerDevice.downloadsDirectory = URL(fileURLWithPath: directory)
-
-            // Open session without try, as it doesn't throw errors
-            scannerDevice.requestOpenSession()
-
-            // Switch to the main thread to handle available scan sources
-            DispatchQueue.main.async {
-                self.handleAvailableScanSources(scannerDevice)
-            }
+        
+        activeScanner = scannerDevice
+        scannerDevice.delegate = self
+        scannerDevice.transferMode = .fileBased
+        
+        if let directory = scanDirectory {
+            scannerDevice.downloadsDirectory = directory
         }
+        
+        scannerDevice.requestOpenSession()
     }
 
     private func handleAvailableScanSources(_ scanner: ICScannerDevice) {
-        // No need to cast availableFunctionalUnitTypes, it's already of type [NSNumber]
-        let functionalUnitTypes = scanner.availableFunctionalUnitTypes
-
+        let functionalUnitTypes = scanner.availableFunctionalUnitTypes/* else {
+            scanFileResult?(FlutterError(code: "NoFunctionalUnits", message: "No available functional units", details: nil))
+            scanFileResult = nil
+            return
+        }*/
+        
         if functionalUnitTypes.contains(NSNumber(value: ICScannerFunctionalUnitType.documentFeeder.rawValue)) {
             scanner.requestSelect(.documentFeeder)
         } else if functionalUnitTypes.contains(NSNumber(value: ICScannerFunctionalUnitType.flatbed.rawValue)) {
@@ -88,25 +100,36 @@ public class QuickScannerPlusPlugin: NSObject, FlutterPlugin {
     private func configureAndStartScan(for functionalUnit: ICScannerFunctionalUnit, scanner: ICScannerDevice) {
         let physicalSize = functionalUnit.physicalSize
         functionalUnit.scanArea = NSMakeRect(0, 0, physicalSize.width, physicalSize.height)
-
-        if functionalUnit.supportedBitDepths.contains(Int(ICScannerBitDepth.depth8Bits.rawValue)) {
-            functionalUnit.pixelDataType = .RGB
+        
+        if functionalUnit.supportedBitDepths.contains(Int(ICScannerBitDepth.depth8Bits.rawValue))
+       //  && functionalUnit.supportedPixelTypes.contains(.RGB)
+          {
+            functionalUnit.pixelDataType = ICScannerPixelDataType.RGB
             functionalUnit.bitDepth = .depth8Bits
+        } else if functionalUnit.supportedBitDepths.contains(Int(ICScannerBitDepth.depth16Bits.rawValue)) 
+      //  && functionalUnit.supportedPixelTypes.contains(.RGB) 
+        {
+            functionalUnit.pixelDataType = ICScannerPixelDataType.RGB
+            functionalUnit.bitDepth = .depth16Bits
         } else {
             functionalUnit.pixelDataType = .BW
             functionalUnit.bitDepth = .depth1Bit
         }
-
+        
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyyMMdd-HHmmss"
+        let dateString = dateFormatter.string(from: Date())
+        scanner.documentName = "Scan-\(dateString)"
+        
         scanner.requestScan()
     }
-}
-
-extension QuickScannerPlusPlugin: ICDeviceBrowserDelegate {
+    
+    // MARK: - ICDeviceBrowserDelegate
     public func deviceBrowser(_ browser: ICDeviceBrowser, didAdd device: ICDevice, moreComing: Bool) {
         if let scanner = device as? ICScannerDevice,
            !scannerDevices.contains(where: { $0.uuidString == scanner.uuidString }) {
             scannerDevices.append(scanner)
-            scanners.append((name: scanner.name ?? "Unknown Scanner", id: scanner.uuidString ?? "Unknown ID"))
+            scanners.append((name: scanner.name ?? "Unknown Scanner", id: scanner.uuidString ?? UUID().uuidString))
         }
     }
 
@@ -114,33 +137,95 @@ extension QuickScannerPlusPlugin: ICDeviceBrowserDelegate {
         if let uuid = device.uuidString {
             scanners.removeAll { $0.id == uuid }
             scannerDevices.removeAll { $0.uuidString == uuid }
+            
+            if activeScanner?.uuidString == uuid {
+                activeScanner = nil
+                if scanFileResult != nil {
+                    scanFileResult?(FlutterError(code: "DeviceRemoved", message: "Scanner was disconnected during operation", details: nil))
+                    scanFileResult = nil
+                }
+            }
         }
     }
-}
+    
+    // MARK: - ICDeviceDelegate
+    // MARK: - ICDeviceDelegate (Required Methods)
+    public func didRemove(_ device: ICDevice) {
+        if let uuid = device.uuidString {
+            scanners.removeAll { $0.id == uuid }
+            scannerDevices.removeAll { $0.uuidString == uuid }
+            
+            if activeScanner?.uuidString == uuid {
+                activeScanner = nil
+                if scanFileResult != nil {
+                    scanFileResult?(FlutterError(
+                        code: "DeviceRemoved", 
+                        message: "Scanner was disconnected during operation", 
+                        details: nil
+                    ))
+                    scanFileResult = nil
+                }
+            }
+        }
+    }
 
-extension QuickScannerPlusPlugin: ICDeviceDelegate {
     public func device(_ device: ICDevice, didOpenSessionWithError error: Error?) {
-        print("Session opened for device: \(device.uuidString ?? "Unknown UUID")")
+        if let error = error {
+            scanFileResult?(FlutterError(
+                code: "SessionError", 
+                message: error.localizedDescription, 
+                details: nil
+            ))
+            scanFileResult = nil
+            activeScanner = nil
+        } else if let scanner = device as? ICScannerDevice {
+            handleAvailableScanSources(scanner)
+        }
     }
 
     public func device(_ device: ICDevice, didCloseSessionWithError error: Error?) {
-        print("Session closed for device: \(device.uuidString ?? "Unknown UUID")")
+        if let error = error {
+            print("Session closed with error: \(error.localizedDescription)")
+        }
+        activeScanner = nil
     }
-
-    public func didRemove(_ device: ICDevice) {
-        print("Device removed: \(device.uuidString ?? "Unknown UUID")")
-    }
-
     public func deviceDidBecomeReady(_ device: ICDevice) {
-        print("Device is ready: \(device.uuidString ?? "Unknown UUID")")
+        print("Device ready: \(device.name ?? "Unknown device")")
     }
-}
-
-extension QuickScannerPlusPlugin: ICScannerDeviceDelegate {
+    
+    
+    public func device(_ device: ICDevice, didReceiveStatusInformation status: [ICDeviceStatus: Any]) {
+        print("Device status: \(status)")
+    }
+    
+    public func device(_ device: ICDevice, didEncounterError error: Error?) {
+        if let error = error {
+            print("Device error: \(error.localizedDescription)")
+            if device == activeScanner {
+                scanFileResult?(FlutterError(code: "DeviceError", message: error.localizedDescription, details: nil))
+                scanFileResult = nil
+            }
+        }
+    }
+    
+    public func deviceDidChangeName(_ device: ICDevice) {
+        print("Device name changed to: \(device.name ?? "Unknown")")
+        if let index = scanners.firstIndex(where: { $0.id == device.uuidString }) {
+            scanners[index].name = device.name ?? "Unknown Scanner"
+        }
+    }
+    
+    public func deviceDidChangeSharingState(_ device: ICDevice) {
+        print("Device sharing state changed")
+    }
+    
+    // MARK: - ICScannerDeviceDelegate
     public func scannerDevice(_ scanner: ICScannerDevice, didSelect functionalUnit: ICScannerFunctionalUnit, error: Error?) {
-        if let e = error {
-            scanFileResult?(FlutterError(code: "SelectUnitError", message: e.localizedDescription, details: nil))
+        if let error = error {
+            scanFileResult?(FlutterError(code: "UnitSelectionError", message: error.localizedDescription, details: nil))
             scanFileResult = nil
+            scanner.requestCloseSession()
+            activeScanner = nil
         } else {
             configureAndStartScan(for: functionalUnit, scanner: scanner)
         }
@@ -149,13 +234,29 @@ extension QuickScannerPlusPlugin: ICScannerDeviceDelegate {
     public func scannerDevice(_ scanner: ICScannerDevice, didScanTo url: URL) {
         scanFileResult?(url.path)
         scanFileResult = nil
+        scanner.requestCloseSession()
+        activeScanner = nil
     }
 
     public func scannerDevice(_ scanner: ICScannerDevice, didCompleteScanWithError error: Error?) {
-        if let e = error {
-            scanFileResult?(FlutterError(code: "ScanError", message: e.localizedDescription, details: nil))
+        if let error = error {
+            scanFileResult?(FlutterError(code: "ScanError", message: error.localizedDescription, details: nil))
+            scanFileResult = nil
         }
-        scanFileResult = nil
         scanner.requestCloseSession()
+        activeScanner = nil
+    }
+    
+    public func scannerDeviceDidBecomeAvailable(_ scanner: ICScannerDevice) {
+        print("Scanner became available: \(scanner.name ?? "Unknown")")
+    }
+    
+    // MARK: - Optional ICDeviceDelegate methods
+    public func device(_ device: ICDevice, didReceiveButtonPress buttonType: String) {
+        print("Device button pressed: \(buttonType)")
+    }
+    
+    public func deviceDidRemoveSharing(_ device: ICDevice) {
+        print("Device stopped sharing")
     }
 }

@@ -1,6 +1,6 @@
 name: quick_scanner_plus
 description: A Flutter plugin for scanning documents based on quick_scanner package.
-version: 0.2.0
+version: 0.2.1
 homepage: https://github.com/bousalem98/quick_scanner_plus
 
 environment:

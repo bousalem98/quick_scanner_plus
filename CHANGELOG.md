@@ -1,3 +1,7 @@
+## 0.2.1
+
+fix macos issue missing argument for parameter when try to run package for macos
+
 ## 0.2.0
 
 Added
